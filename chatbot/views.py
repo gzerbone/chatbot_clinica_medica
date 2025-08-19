@@ -6,7 +6,7 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .utils import send_whatsapp_message
+from .utils import generate_gemini_response, send_whatsapp_message
 
 # Create your views here.
 # chatbot/views.py
@@ -67,36 +67,22 @@ class WebhookView(APIView):
                     for change in entry['changes']:
                         value = change['value']
                         
-                        # Verifica se contém mensagens (mensagem real do usuário)
+                        # Verifica se contém mensagens
                         if 'messages' in value:
-                            metadata = value['metadata']
-                            phone_number_id = metadata['phone_number_id']
-                            display_phone_number = metadata['display_phone_number']
-                            
-                            print(f"📱 Número de telefone ID: {phone_number_id}")
-                            print(f"📱 Número de exibição: {display_phone_number}")
-                            
                             for message in value['messages']:
                                 from_number = message['from']
-                                message_id = message['id']
-                                timestamp = message['timestamp']
                                 message_type = message['type']
                                 
-                                print(f"💬 NOVA MENSAGEM de: {from_number}")
-                                print(f"💬 ID da mensagem: {message_id}")
-                                print(f"💬 Timestamp: {timestamp}")
-                                print(f"💬 Tipo: {message_type}")
-                                
-                                # Processa diferentes tipos de mensagem
                                 if message_type == 'text':
                                     message_text = message['text']['body']
-                                    print(f"💬 Texto: {message_text}")
+                                    print(f"Texto do usuário: {message_text}")
                                     
-                                    # ######################################################
-                                    # ##### AQUI A MÁGICA ACONTECE: ENVIANDO A RESPOSTA ####
-                                    # ######################################################
-                                    response_text = f"Você disse: {message_text}"
-                                    print(f"🤖 Enviando resposta para {from_number}: {response_text}")
+                                    # Nova lógica com o "Cérebro" Gemini
+                                    print("Consultando a IA do Google para obter uma resposta...")
+                                    response_text = generate_gemini_response(message_text)
+                                    print(f"Resposta gerada pela IA: {response_text}")
+                                    
+                                    # Envia a resposta inteligente para o usuário
                                     send_whatsapp_message(from_number, response_text)
                                 
                                 elif message_type == 'image':
@@ -108,22 +94,7 @@ class WebhookView(APIView):
                         
                         # Verifica se contém status de entrega/leitura (não precisa responder)
                         elif 'statuses' in value:
-                            metadata = value['metadata']
-                            phone_number_id = metadata['phone_number_id']
-                            display_phone_number = metadata['display_phone_number']
-                            
-                            print(f"📋 Status de entrega recebido do número: {display_phone_number}")
-                            
-                            for status_info in value['statuses']:
-                                message_id = status_info['id']
-                                status_type = status_info['status']
-                                timestamp = status_info['timestamp']
-                                recipient_id = status_info['recipient_id']
-                                
-                                print(f"📋 Status da mensagem {message_id}: {status_type}")
-                                print(f"📋 Para: {recipient_id}")
-                                print(f"📋 Timestamp: {timestamp}")
-                                print("📋 (Status de entrega - não necessita resposta)")
+                            print("📋 Status de entrega recebido (ignorando)")
 
         except KeyError as e:
             # Se a estrutura do JSON for diferente, apenas registre o erro
