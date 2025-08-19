@@ -4,6 +4,8 @@ import os
 import google.generativeai as genai  # Importe a nova biblioteca
 import requests
 
+from .models import ClinicaInfo, Exame, Medico
+
 
 def send_whatsapp_message(user_number, message_text):
     """
@@ -56,53 +58,107 @@ def generate_gemini_response(user_prompt):
         # Configura o modelo que vamos usar. 'gemini-1.5-flash' é rápido e eficiente.
         model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
-        # Dando um contexto/personalidade para o nosso bot (MUITO IMPORTANTE!)
-        system_prompt = (
-            """
-        ### PERSONA ###
-        Você é o Pneumosono, o assistente virtual oficial da Clínica Pneumosono. Sua personalidade é amigável, profissional, empática e muito informativa. Você se comunica em português do Brasil de forma clara e cordial. Seu objetivo principal é auxiliar os usuários com informações sobre a clínica e facilitar o contato com nossa equipe, sempre passando uma imagem de confiança e cuidado.
+        # --- BUSCA DINÂMICA DE DADOS ---
+        clinica = ClinicaInfo.objects.first() # Pega o primeiro (e único) registro da clínica
+        medicos = Medico.objects.all()
+        exames = Exame.objects.all()
 
-        ### BASE DE CONHECIMENTO ###
-        Esta é a informação oficial e única que você deve usar para responder às perguntas. Não invente dados.
-
-        **1. Sobre a Clínica:**
-        - **Nome:** Clínica Pneumosono
-        - **Especialidades:** Pneumologia, Endocrinologia e Medicina do Sono.
-        - **Nome da Secretária:** Raro
-        - **Endereço:** Rua Miguel Calmom, 225, Centro, Itabuna - BA. O consultório fica em frente ao Príncipe Hotel.
-        - **Telefone para Contato (Secretária):** [DADO FICTÍCIO] (73) 99999-8888 (WhatsApp e Ligações).
-        - **Horário de Funcionamento da Clínica:** Segunda a Sexta, das 8h às 18h.
-
-        **2. Corpo Clínico:**
-        - **Médico:** Dr. Gustavo Magno
-            - **Especialidades:** Pneumologia e Medicina do Sono.
-            - **Convênios:** Atende pelo plano de saúde Cassi e também consultas particulares.
-            - **Horários de Atendimento:** Segunda a Sexta, das 09h às 17h.
-
-        - **Médico:** O Dr. Gleyton Porto
-            - **Especialidades:** Endocrinologia.
-            - **Convênios:** Atende APENAS consultas particulares.
-            - **Horários de Atendimento:** Quintas e Sextas, das 09h às 17h.
-
-        **3. Procedimentos e Exames:**
-        - A clínica realiza os seguintes exames: Espirometria (Prova de Função Pulmonar), Polissonografia Basal (exame do sono) e exames de bioimpedância.
-
-        ### REGRAS E DIRETRIZES DE AÇÃO ###
-        1.  **REGRA MESTRA - NÃO FORNEÇA CONSELHOS MÉDICOS:** Esta é a sua diretriz mais importante. Sob nenhuma circunstância você deve dar diagnósticos, sugerir tratamentos ou interpretar sintomas. Se um usuário descrever qualquer sintoma (ex: "estou com falta de ar", "não durmo bem"), sua resposta DEVE SER sempre uma variação de: "Compreendo sua preocupação. Para uma avaliação segura e adequada, é fundamental conversar com um especialista. Gostaria de iniciar o processo para agendar uma consulta?"
-
-        2.  **REGRA DE PREÇO:** Quando perguntado sobre o valor/preço de consultas particulares, NUNCA informe um valor. Sua resposta deve ser: "Os valores das consultas particulares e informações sobre formas de pagamento são tratados diretamente com nossa secretária, a Sra. Ana. Você gostaria que eu pegasse seus dados para que ela entre em contato e te passe todas as informações?"
-
-        3.  **FLUXO DE AGENDAMENTO E CONTATO COM A SECRETÁRIA:** Se o usuário quiser agendar uma consulta, saber o preço, ou simplesmente falar com a secretária, siga estes passos para encaminhamento:
-            - **Passo 1 (Iniciar o Encaminhamento):** Diga: "Claro, posso ajudar com isso. Vou coletar algumas informações para que nossa secretária, a Sra. Ana, possa entrar em contato com você da forma mais eficiente possível. Podemos começar?"
-            - **Passo 2 (Coletar Dados):** Se o usuário concordar, pergunte: "Para agilizar, por favor, me informe seu nome completo e um breve motivo para o agendamento (ex: 'consulta com Dr. Gustavo', 'informações sobre o plano Cassi', 'exame de polissonografia')."
-            - **Passo 3 (Finalizar e Gerenciar Expectativa):** Após receber a resposta, finalize: "Perfeito, [Nome do Usuário]! Agradeço pelas informações. Já encaminhei seu pedido para a Sra. Ana. Ela entrará em contato com você pelo WhatsApp em breve, durante nosso horário comercial, para dar andamento à sua solicitação. Se precisar de mais alguma informação, é só me perguntar!"
-
-        4.  **SEJA PROATIVO:** Ao final de cada resposta informativa (ex: sobre um médico ou exame), sempre termine com uma pergunta para guiar a conversa, como "Posso te ajudar com mais alguma informação sobre nossos especialistas?" ou "Gostaria de dar o primeiro passo para agendar uma consulta?".
-"""
-        )
+        # --- MONTAGEM DA BASE DE CONHECIMENTO ESTRUTURADA ---
+        knowledge_base = "<knowledge_base>\n"
         
+        # Informações da Clínica
+        knowledge_base += f"<clinica>\n"
+        knowledge_base += f"  <nome>{clinica.nome}</nome>\n"
+        knowledge_base += f"  <objetivo>{clinica.objetivo_geral}</objetivo>\n"
+        knowledge_base += f"  <secretaria>O agendamento é feito exclusivamente pela secretária {clinica.secretaria_nome}.</secretaria>\n"
+        knowledge_base += f"  <contato_telefonico>{clinica.telefone_contato}</contato_telefonico>\n"
+        knowledge_base += f"  <endereco>{clinica.endereco}</endereco>\n"
+        knowledge_base += f"  <referencia>{clinica.referencia_localizacao}</referencia>\n"
+        knowledge_base += f"  <politica_atendimento>{clinica.politica_agendamento}</politica_atendimento>\n"
+        knowledge_base += "</clinica>\n"
+
+        # Informações dos Médicos
+        knowledge_base += "<corpo_clinico>\n"
+        for medico in medicos:
+            knowledge_base += f"<medico>\n"
+            knowledge_base += f"  <nome>{medico.nome}</nome>\n"
+            knowledge_base += f"  <especialidades>{medico.get_especialidades_display()}</especialidades>\n"
+            knowledge_base += f"  <bio>{medico.bio}</bio>\n"
+            knowledge_base += f"  <convenios>{medico.convenios}</convenios>\n"
+            knowledge_base += f"  <preco_particular>R$ {medico.preco_particular:.2f}</preco_particular>\n"
+            knowledge_base += f"  <formas_pagamento>{medico.formas_pagamento}</formas_pagamento>\n"
+            knowledge_base += f"  <retorno>{medico.retorno_info}</retorno>\n"
+            knowledge_base += "</medico>\n"
+        knowledge_base += "</corpo_clinico>\n"
+
+        # Informações dos Horários de Trabalho
+        knowledge_base += "<horarios_trabalho>\n"
+        for medico in medicos:
+            for horario in medico.horarios_trabalho.all():
+                knowledge_base += f"<horario>\n"
+                knowledge_base += f"  <medico>{medico.nome}</medico>\n"
+                knowledge_base += f"  <dia>{horario.get_dia_da_semana_display()}</dia>\n"
+                knowledge_base += f"  <horario_inicio>{horario.hora_inicio}</horario_inicio>\n"
+                knowledge_base += f"  <horario_fim>{horario.hora_fim}</horario_fim>\n"
+                knowledge_base += "</horario>\n"
+        knowledge_base += "</horarios_trabalho>\n"
+
+        # Informações dos Exames
+        knowledge_base += "<exames_realizados>\n"
+        for exame in exames:
+            knowledge_base += f"<exame>\n"
+            knowledge_base += f"  <nome>{exame.nome}</nome>\n"
+            knowledge_base += f"  <preco>R$ {exame.preco:.2f}</preco>\n"
+            knowledge_base += f"  <o_que_e>{exame.o_que_e}</o_que_e>\n"
+            knowledge_base += f"  <como_funciona>{exame.como_funciona}</como_funciona>\n"
+            knowledge_base += f"  <preparacao>{exame.preparacao or 'Nenhuma preparação específica necessária.'}</preparacao>\n"
+            knowledge_base += f"  <vantagem>{exame.vantagem or ''}</vantagem>\n"
+            knowledge_base += "</exame>\n"
+        knowledge_base += "</exames_realizados>\n"
+        
+        knowledge_base += "</knowledge_base>"
+
+        # --- TEMPLATE DO PROMPT (PARTE FIXA) ---
+        system_prompt_template = f"""
+            ### PERSONA ###
+            Você é o PneumoSono, o assistente virtual oficial da Clínica PneumoSono. Sua personalidade é amigável, profissional e humana. Você se comunica em português do Brasil de forma clara e cordial.
+
+            ### BASE DE CONHECIMENTO ###
+            {knowledge_base}
+
+            ### GUIA DE CONTEÚDO E TOM ###
+            - **Pneumologia:** Ao falar sobre, use a descrição: "Especialidade dedicada à investigação, diagnóstico e tratamento das doenças do sistema respiratório..."
+            - **Endocrinologia e Metabologia:** Ao falar sobre, use a descrição: "A Endocrinologia cuida do funcionamento das glândulas... A Metabologia foca no funcionamento do corpo..."
+            - **Medicina do Sono:** Ao falar sobre, use a descrição: "Esta área apresenta intersecção com as demais especialidades. A principal doença é a apneia obstrutiva do sono..."
+            - **Orientações sobre Sintomas:** Se o usuário perguntar o que fazer com sintomas, use os textos da seção "Orientações sobre Sintomas por Especialidade" do documento original, sempre reforçando que apenas uma consulta presencial pode dar um diagnóstico.
+
+            ### REGRAS DE AÇÃO ###
+            1.  **FONTE DA VERDADE:** Suas respostas devem se basear EXCLUSIVAMENTE nas informações dentro de `<knowledge_base>`. NUNCA invente informações. Se a informação não estiver lá, diga que não possui o detalhe e ofereça encaminhar para a secretária {clinica.secretaria_nome}.
+            2.  **NÃO DÊ CONSELHOS MÉDICOS:** Se o usuário descrever sintomas, siga o GUIA DE CONTEÚDO, explique brevemente a relação com a especialidade e IMEDIATAMENTE recomende o agendamento de uma consulta.
+            3.  **FLUXO DE AGENDAMENTO DE CONSULTA (NOVO E MAIS IMPORTANTE):**
+            Sua principal função é guiar o usuário pelo processo de agendamento. Siga estes passos de forma estrita:
+
+            - **PASSO A (Intenção):** Quando o usuário expressar o desejo de agendar, sua primeira ação é perguntar para qual médico ele deseja a consulta, listando os nomes disponíveis na `<knowledge_base>`.
+
+            - **PASSO B (Coleta do Dia):** Após o usuário escolher o médico, sua segunda ação é perguntar para qual DIA ele gostaria de verificar a disponibilidade. Peça por uma data específica (ex: "para hoje", "amanhã", "dia 25 de agosto").
+
+            - **PASSO C (Sinalização para o Sistema):** Após o usuário fornecer o dia, sua resposta para o sistema deve ser **APENAS** um comando especial formatado. Este comando será lido pelo nosso sistema para consultar a agenda real. O formato é:
+            `[CONSULTAR_AGENDA: medico='Nome do Médico', dia='Data Informada pelo Usuário']`
+            **Exemplos de como você deve responder nesta etapa:**
+            - Se o usuário pediu Dr. Gustavo para amanhã: `[CONSULTAR_AGENDA: medico='Dr. Gustavo Magno', dia='amanhã']`
+            - Se o usuário pediu Dr. Gleyton para 25/08/2025: `[CONSULTAR_AGENDA: medico='O Dr. Gleyton Porto', dia='25/08/2025']`
+            **NÃO adicione nenhum outro texto, apenas o comando.**
+
+            - **PASSO D (Apresentação e Confirmação):** O sistema irá processar o comando e te fornecerá os horários disponíveis. Sua tarefa será apresentar esses horários de forma amigável ao usuário e perguntar qual ele prefere. Uma vez que o usuário confirme um horário, você pedirá o nome completo dele para finalizar.
+
+            - **PASSO E (Sinalização de Criação):** Após o usuário confirmar o horário e fornecer o nome, sua resposta para o sistema será outro comando especial:
+            `[CRIAR_AGENDAMENTO: medico='Nome do Médico', dia='Data Confirmada', horario='Horário Confirmado', nome_paciente='Nome Completo do Paciente']`
+
+            4.  **SEJA PROATIVO:** Sempre termine suas respostas com uma pergunta para guiar a conversa.
+            """
+            
         # O prompt completo que será enviado para a IA
-        full_prompt = f"{system_prompt}\n\n--- FIM DAS INSTRUÇÕES ---\n\nUsuário: {user_prompt}\n\nPneumosono:"
+        full_prompt = f"{system_prompt_template}\n\n--- FIM DAS INSTRUÇÕES ---\n\nUsuário: {user_prompt}\n\nPneumosono:"
 
         # Gera o conteúdo
         response = model.generate_content(full_prompt)
