@@ -4,7 +4,7 @@ import os
 import google.generativeai as genai  # Importe a nova biblioteca
 import requests
 
-from .models import ClinicaInfo, Exame, Medico
+from .models import Agendamento, ClinicaInfo, Exame, HorarioTrabalho, Medico
 
 
 def send_whatsapp_message(user_number, message_text):
@@ -42,9 +42,10 @@ def send_whatsapp_message(user_number, message_text):
 
     return response
 
-def generate_gemini_response(user_prompt):
+def generate_gemini_response(chat_history):
     """
-    Envia um prompt para a API do Gemini e retorna a resposta gerada.
+    Envia o histórico da conversa para a API do Gemini e retorna a resposta gerada.
+    chat_history: Lista de mensagens no formato [{'role': 'user'/'model', 'parts': ['texto']}]
     """
     gemini_api_key = os.environ.get("GEMINI_API_KEY")
 
@@ -62,6 +63,7 @@ def generate_gemini_response(user_prompt):
         clinica = ClinicaInfo.objects.first() # Pega o primeiro (e único) registro da clínica
         medicos = Medico.objects.all()
         exames = Exame.objects.all()
+        horarios_trabalho = HorarioTrabalho.objects.all()
 
         # --- MONTAGEM DA BASE DE CONHECIMENTO ESTRUTURADA ---
         knowledge_base = "<knowledge_base>\n"
@@ -93,14 +95,13 @@ def generate_gemini_response(user_prompt):
 
         # Informações dos Horários de Trabalho
         knowledge_base += "<horarios_trabalho>\n"
-        for medico in medicos:
-            for horario in medico.horarios_trabalho.all():
-                knowledge_base += f"<horario>\n"
-                knowledge_base += f"  <medico>{medico.nome}</medico>\n"
-                knowledge_base += f"  <dia>{horario.get_dia_da_semana_display()}</dia>\n"
-                knowledge_base += f"  <horario_inicio>{horario.hora_inicio}</horario_inicio>\n"
-                knowledge_base += f"  <horario_fim>{horario.hora_fim}</horario_fim>\n"
-                knowledge_base += "</horario>\n"
+        for horario in horarios_trabalho:
+            knowledge_base += f"<horario>\n"
+            knowledge_base += f"  <medico>{horario.medico.nome}</medico>\n"
+            knowledge_base += f"  <dia>{horario.get_dia_da_semana_display()}</dia>\n"
+            knowledge_base += f"  <horario_inicio>{horario.hora_inicio}</horario_inicio>\n"
+            knowledge_base += f"  <horario_fim>{horario.hora_fim}</horario_fim>\n"
+            knowledge_base += "</horario>\n"
         knowledge_base += "</horarios_trabalho>\n"
 
         # Informações dos Exames
@@ -119,7 +120,7 @@ def generate_gemini_response(user_prompt):
         knowledge_base += "</knowledge_base>"
 
         # --- TEMPLATE DO PROMPT (PARTE FIXA) ---
-        system_prompt_template = f"""
+        system_prompt = f"""
             ### PERSONA ###
             Você é o PneumoSono, o assistente virtual oficial da Clínica PneumoSono. Sua personalidade é amigável, profissional e humana. Você se comunica em português do Brasil de forma clara e cordial.
 
@@ -157,13 +158,27 @@ def generate_gemini_response(user_prompt):
             4.  **SEJA PROATIVO:** Sempre termine suas respostas com uma pergunta para guiar a conversa.
             """
             
-        # O prompt completo que será enviado para a IA
-        full_prompt = f"{system_prompt_template}\n\n--- FIM DAS INSTRUÇÕES ---\n\nUsuário: {user_prompt}\n\nPneumosono:"
+        # Verifica se há histórico de conversa
+        if not chat_history:
+            return "Erro: Histórico de conversa vazio."
+        
+        # Prepara o histórico para o Gemini (exceto a última mensagem do usuário)
+        gemini_history = [
+            {'role': 'user', 'parts': [system_prompt]},
+            {'role': 'model', 'parts': ["Entendido. Estou pronto para ajudar os pacientes da Clínica PneumoSono."]}
+        ]
+        
+        # Adiciona o histórico anterior (se houver mais de 1 mensagem)
+        if len(chat_history) > 1:
+            gemini_history.extend(chat_history[:-1])
+        
+        # Inicia um chat com o system_prompt e o histórico
+        chat = model.start_chat(history=gemini_history)
 
-        # Gera o conteúdo
-        response = model.generate_content(full_prompt)
+        # Envia a última mensagem do usuário para obter a nova resposta
+        last_user_message = chat_history[-1]['parts'][0]
+        response = chat.send_message(last_user_message)
 
-        # Retorna o texto da resposta
         return response.text
 
     except Exception as e:

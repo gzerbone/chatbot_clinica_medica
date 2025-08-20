@@ -1,6 +1,7 @@
 import json  # Importe a biblioteca json
 import os  # Importe a biblioteca os
 
+from django.core.cache import cache  # Importe o cache do Django
 from django.shortcuts import render
 from rest_framework import status
 from rest_framework.response import Response
@@ -67,34 +68,73 @@ class WebhookView(APIView):
                     for change in entry['changes']:
                         value = change['value']
                         
-                        # Verifica se contém mensagens
                         if 'messages' in value:
-                            for message in value['messages']:
-                                from_number = message['from']
-                                message_type = message['type']
+                            message_data = value['messages'][0]
+                            from_number = message_data['from']
+                            
+                            # Apenas processa mensagens de texto por enquanto
+                            if message_data['type'] == 'text':
+                                message_text = message_data['text']['body']
                                 
-                                if message_type == 'text':
-                                    message_text = message['text']['body']
-                                    print(f"Texto do usuário: {message_text}")
-                                    
-                                    # Nova lógica com o "Cérebro" Gemini
-                                    print("Consultando a IA do Google para obter uma resposta...")
-                                    response_text = generate_gemini_response(message_text)
-                                    print(f"Resposta gerada pela IA: {response_text}")
-                                    
-                                    # Envia a resposta inteligente para o usuário
-                                    send_whatsapp_message(from_number, response_text)
+                                # --- INÍCIO DA LÓGICA DE MEMÓRIA ---
                                 
-                                elif message_type == 'image':
-                                    print("Imagem recebida")
-                                elif message_type == 'audio':
-                                    print("Áudio recebido")
-                                elif message_type == 'document':
-                                    print("Documento recebido")
-                        
-                        # Verifica se contém status de entrega/leitura (não precisa responder)
-                        elif 'statuses' in value:
-                            print("📋 Status de entrega recebido (ignorando)")
+                                # 1. Cria uma chave de sessão única para este usuário
+                                session_key = f"whatsapp_session_{from_number}"
+                                
+                                # 2. Tenta recuperar a "ficha de atendimento" (dados da conversa) do cache
+                                conversation_data = cache.get(session_key, {}) # Retorna {} se não encontrar
+                                
+                                # 3. Recupera o histórico e o estado atual da conversa
+                                chat_history = conversation_data.get('history', [])
+                                conversation_state = conversation_data.get('state', 'START')
+                                
+                                print(f"Usuário: {from_number} | Estado Atual: {conversation_state}")
+
+                                # 4. Adiciona a nova mensagem do usuário ao histórico
+                                chat_history.append({'role': 'user', 'parts': [message_text]})
+
+                                # 5. Chama a IA, agora passando o histórico da conversa
+                                gemini_response_text = generate_gemini_response(chat_history)
+                                
+                                # 6. Adiciona a resposta da IA ao histórico
+                                chat_history.append({'role': 'model', 'parts': [gemini_response_text]})
+                                
+                                # 7. Processa a resposta da IA para ver se é um comando
+                                if '[CONSULTAR_AGENDA:' in gemini_response_text:
+                                    # O bot decidiu que é hora de consultar a agenda.
+                                    # Por enquanto, vamos apenas simular e mudar o estado.
+                                    
+                                    # Futuramente, aqui você extrairia os dados e chamaria o google_calendar_service.py
+                                    print("COMANDO DETECTADO: [CONSULTAR_AGENDA]")
+                                    
+                                    # Mudamos o estado para o próximo passo
+                                    new_state = 'AWAITING_TIME_CHOICE'
+                                    
+                                    # Mensagem de simulação para o usuário
+                                    final_response_text = "Ok, estou verificando a agenda... (simulação). Encontrei horários às 10:00, 11:00 e 15:00. Qual prefere?"
+                                
+                                elif '[CRIAR_AGENDAMENTO:' in gemini_response_text:
+                                    # Lógica similar para o comando de criação
+                                    print("COMANDO DETECTADO: [CRIAR_AGENDAMENTO]")
+                                    new_state = 'START' # Reseta a conversa
+                                    final_response_text = "Perfeito! Agendamento confirmado! (simulação)."
+                                    
+                                else:
+                                    # É uma resposta normal, o estado continua o mesmo ou reseta se necessário
+                                    new_state = conversation_state # Mantém o estado
+                                    final_response_text = gemini_response_text
+                                
+                                # 8. Atualiza a "ficha de atendimento" com os novos dados
+                                updated_conversation_data = {
+                                    'state': new_state,
+                                    'history': chat_history
+                                }
+                                
+                                # 9. Salva a ficha atualizada no cache por 15 minutos
+                                cache.set(session_key, updated_conversation_data, timeout=60)
+                                
+                                # 10. Envia a resposta final para o usuário
+                                send_whatsapp_message(from_number, final_response_text)
 
         except KeyError as e:
             # Se a estrutura do JSON for diferente, apenas registre o erro
