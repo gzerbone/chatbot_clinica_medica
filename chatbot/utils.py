@@ -1,10 +1,11 @@
 import json
 import os
 
-import google.generativeai as genai  # Importe a nova biblioteca
 import requests
+from google import genai  # API nova (google-genai)
+from google.genai import types as genai_types
 
-from .models import Agendamento, ClinicaInfo, Exame, HorarioTrabalho, Medico
+from .models import ClinicaInfo, Exame, HorarioTrabalho, Medico
 
 
 def send_whatsapp_message(user_number, message_text):
@@ -44,21 +45,16 @@ def send_whatsapp_message(user_number, message_text):
 
 def generate_gemini_response(chat_history):
     """
-    Envia o histórico da conversa para a API do Gemini e retorna a resposta gerada.
-    chat_history: Lista de mensagens no formato [{'role': 'user'/'model', 'parts': ['texto']}]
+    Envia o histórico da conversa para a API nova (google-genai) e retorna a resposta.
+    chat_history: Lista de mensagens no formato [{'role': 'user'|'model', 'parts': ['texto']}]
     """
-    gemini_api_key = os.environ.get("GEMINI_API_KEY")
+    api_key = os.environ.get("GEMINI_API_KEY")
 
-    if not gemini_api_key:
-        return "Erro: A chave de API do Gemini não foi configurada."
+    if not api_key:
+        return "Erro: A variável de ambiente GEMINI_API_KEY não foi configurada."
 
     try:
-        # Configura a API key
-        genai.configure(api_key=gemini_api_key)
-
-        # Configura o modelo que vamos usar. 'gemini-1.5-flash' é rápido e eficiente.
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
-
+        client = genai.Client(api_key=api_key)
         # --- BUSCA DINÂMICA DE DADOS ---
         clinica = ClinicaInfo.objects.first() # Pega o primeiro (e único) registro da clínica
         medicos = Medico.objects.all()
@@ -122,7 +118,8 @@ def generate_gemini_response(chat_history):
         # --- TEMPLATE DO PROMPT (PARTE FIXA) ---
         system_prompt = f"""
             ### PERSONA ###
-            Você é o PneumoSono, o assistente virtual oficial da Clínica PneumoSono. Sua personalidade é amigável, profissional e humana. Você se comunica em português do Brasil de forma clara e cordial.
+            Você é o PneumoSono, o assistente virtual oficial da Clínica PneumoSono. Sua personalidade é amigável, profissional e humana. Você se comunica em português do Brasil de forma clara e cordial. 
+            **Sempre informe ao usuário que você é um assistente virtual e não um médico ou uma secretária humana.**
 
             ### BASE DE CONHECIMENTO ###
             {knowledge_base}
@@ -132,6 +129,7 @@ def generate_gemini_response(chat_history):
             - **Endocrinologia e Metabologia:** Ao falar sobre, use a descrição: "A Endocrinologia cuida do funcionamento das glândulas... A Metabologia foca no funcionamento do corpo..."
             - **Medicina do Sono:** Ao falar sobre, use a descrição: "Esta área apresenta intersecção com as demais especialidades. A principal doença é a apneia obstrutiva do sono..."
             - **Orientações sobre Sintomas:** Se o usuário perguntar o que fazer com sintomas, use os textos da seção "Orientações sobre Sintomas por Especialidade" do documento original, sempre reforçando que apenas uma consulta presencial pode dar um diagnóstico.
+            - **Formas de comunicação**: Utilizar linguagem amigável e informal. Poucos emojis. Não utilizar formatos como mardown
 
             ### REGRAS DE AÇÃO ###
             1.  **FONTE DA VERDADE:** Suas respostas devem se basear EXCLUSIVAMENTE nas informações dentro de `<knowledge_base>`. NUNCA invente informações. Se a informação não estiver lá, diga que não possui o detalhe e ofereça encaminhar para a secretária {clinica.secretaria_nome}.
@@ -161,25 +159,33 @@ def generate_gemini_response(chat_history):
         # Verifica se há histórico de conversa
         if not chat_history:
             return "Erro: Histórico de conversa vazio."
-        
-        # Prepara o histórico para o Gemini (exceto a última mensagem do usuário)
-        gemini_history = [
-            {'role': 'user', 'parts': [system_prompt]},
-            {'role': 'model', 'parts': ["Entendido. Estou pronto para ajudar os pacientes da Clínica PneumoSono."]}
-        ]
-        
-        # Adiciona o histórico anterior (se houver mais de 1 mensagem)
-        if len(chat_history) > 1:
-            gemini_history.extend(chat_history[:-1])
-        
-        # Inicia um chat com o system_prompt e o histórico
-        chat = model.start_chat(history=gemini_history)
 
-        # Envia a última mensagem do usuário para obter a nova resposta
-        last_user_message = chat_history[-1]['parts'][0]
-        response = chat.send_message(last_user_message)
+        # Esta seção prepara os dados para a API do Gemini:
+        # to_parts(): Função auxiliar que converte uma lista de strings em objetos Part que a API do Gemini entende
+        # contents: Lista vazia que será preenchida com objetos Content formatados corretamente para enviar ao modelo
+        # Basicamente, está convertendo o histórico de conversa do formato interno do sistema para o formato específico que a nova API do Google Gemini (google-genai) requer.
+        def to_parts(parts_list):
+            return [genai_types.Part.from_text(text=p) for p in parts_list]
 
-        return response.text
+        contents: list[genai_types.Content] = []
+
+        # Replica o histórico existente
+        for item in chat_history:
+            role = item.get('role', 'user')
+            parts = item.get('parts', [])
+            contents.append(genai_types.Content(role=role, parts=to_parts(parts)))
+
+        # Chamada única passando system_instruction no config
+        response = client.models.generate_content(
+            model="gemini-2.0-flash-exp",
+            contents=contents,
+            config=genai_types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                thinking_config=genai_types.ThinkingConfig(thinking_budget=0)
+            )
+        )
+
+        return response.text or ""
 
     except Exception as e:
         print(f"Ocorreu um erro ao chamar a API do Gemini: {e}")

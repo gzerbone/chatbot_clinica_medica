@@ -1,4 +1,4 @@
 .env
-env
+venv
 google-credentials.json
 codigo_r.py

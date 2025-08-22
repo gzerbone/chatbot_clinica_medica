@@ -9,9 +9,6 @@ from rest_framework.views import APIView
 
 from .utils import generate_gemini_response, send_whatsapp_message
 
-# Create your views here.
-# chatbot/views.py
-
 
 # Defina seu Token de Verificação aqui. Deve ser uma string longa e secreta.
 # É uma boa prática carregá-lo de uma variável de ambiente.
@@ -98,6 +95,7 @@ class WebhookView(APIView):
                                 
                                 # 6. Adiciona a resposta da IA ao histórico
                                 chat_history.append({'role': 'model', 'parts': [gemini_response_text]})
+                                print(f"Histórico da conversa: {chat_history}")
                                 
                                 # 7. Processa a resposta da IA para ver se é um comando
                                 if '[CONSULTAR_AGENDA:' in gemini_response_text:
@@ -130,11 +128,13 @@ class WebhookView(APIView):
                                     'history': chat_history
                                 }
                                 
-                                # 9. Salva a ficha atualizada no cache por 15 minutos
-                                cache.set(session_key, updated_conversation_data, timeout=60)
+                                # 9. Salva a ficha atualizada no cache por 2 minutos
+                                cache.set(session_key, updated_conversation_data, timeout=120)
                                 
                                 # 10. Envia a resposta final para o usuário
                                 send_whatsapp_message(from_number, final_response_text)
+                                
+                                
 
         except KeyError as e:
             # Se a estrutura do JSON for diferente, apenas registre o erro
