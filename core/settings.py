@@ -43,8 +43,17 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    
+    # Apps de terceiros
     'rest_framework',
-    'chatbot'
+    
+    # Apps do projeto
+    'usuarios.apps.UsuariosConfig',
+    'clinica.apps.ClinicaConfig',
+    'medicos.apps.MedicosConfig',
+    'agendamento.apps.AgendamentoConfig',
+    'chatbot.apps.ChatbotConfig',
+    'admin_custom.apps.AdminCustomConfig',
 ]
 
 MIDDLEWARE = [
@@ -129,6 +138,14 @@ STATIC_URL = 'static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+# Configuração do modelo de usuário customizado
+AUTH_USER_MODEL = 'usuarios.Usuario'
+
+# Configuração de arquivos de mídia
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
+# Configuração de cache
 CACHES = {
     'default': {
         'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',

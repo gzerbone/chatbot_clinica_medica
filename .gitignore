@@ -2,3 +2,12 @@
 venv
 google-credentials.json
 codigo_r.py
+db.sqlite3
+media
+static
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz

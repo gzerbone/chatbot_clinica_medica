@@ -1,122 +1,210 @@
 # chatbot/models.py
-from decimal import Decimal
-
+from django.contrib.auth import get_user_model
 from django.db import models
 
+User = get_user_model()
 
-# Modelo para as especialidades médicas
-class Especialidade(models.Model):
-    nome = models.CharField(max_length=100, unique=True)
-    descricao = models.TextField(blank=True, null=True, help_text="Descrição da especialidade")
-    ativa = models.BooleanField(default=True, help_text="Se a especialidade está ativa para seleção")
+
+class ConversaWhatsApp(models.Model):
+    """
+    Modelo para armazenar conversas do WhatsApp com o chatbot.
+    """
+    numero_whatsapp = models.CharField(max_length=20)
+    usuario = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name='conversas_whatsapp'
+    )
+    contexto = models.JSONField(
+        default=dict,
+        help_text="Contexto da conversa em formato JSON"
+    )
+    ultima_interacao = models.DateTimeField(auto_now=True)
+    ativa = models.BooleanField(default=True)
+    
+    criado_em = models.DateTimeField(auto_now_add=True)
     
     class Meta:
-        ordering = ['nome']
-        verbose_name = 'Especialidade'
-        verbose_name_plural = 'Especialidades'
+        ordering = ['-ultima_interacao']
+        verbose_name = 'Conversa WhatsApp'
+        verbose_name_plural = 'Conversas WhatsApp'
     
     def __str__(self):
-        return self.nome
+        return f"Conversa com {self.numero_whatsapp}"
 
 
-# Modelo para armazenar informações globais da clínica (só haverá 1 registro)
-class ClinicaInfo(models.Model):
-    nome = models.CharField(max_length=100, default="Clínica PneumoSono")
-    objetivo_geral = models.TextField()
-    secretaria_nome = models.CharField(max_length=100, default="Raro")
-    telefone_contato = models.CharField(max_length=20)
-    endereco = models.TextField()
-    referencia_localizacao = models.CharField(max_length=200)
-    politica_agendamento = models.TextField(help_text="Texto sobre a política de horários pré-agendados e possíveis demoras.")
-
-    # NOVO CAMPO AQUI: O ID da agenda principal da clínica
-    google_calendar_id = models.CharField(
-        max_length=255, 
-        blank=True, 
-        null=True, 
-        help_text="O ID do Google Calendar PRINCIPAL da clínica."
-    )
-
-    def __str__(self):
-        return self.nome
-    
-class Medico(models.Model):
-    nome = models.CharField(max_length=100)
-    especialidades = models.ManyToManyField(
-        Especialidade, 
-        related_name='medicos',
-        help_text="Selecione uma ou mais especialidades do médico"
-    )
-    bio = models.TextField()
-    convenios = models.CharField(max_length=200, help_text="Ex: Atende apenas CASSI")
-    preco_particular = models.DecimalField(max_digits=8, decimal_places=2)
-    formas_pagamento = models.CharField(max_length=200)
-    retorno_info = models.CharField(max_length=100, default="Consulta de retorno em até 30 dias incluído no valor.")
-
-    def __str__(self):
-        return self.nome
-    
-    def get_especialidades_display(self):
-        """Retorna as especialidades como string formatada"""
-        return ", ".join([esp.nome for esp in self.especialidades.filter(ativa=True)])
-
-# NOVO MODELO: Para definir os blocos de horário de trabalho de cada médico.
-class HorarioTrabalho(models.Model):
-    DIA_DA_SEMANA_CHOICES = [
-        (1, "Segunda-feira"),
-        (2, "Terça-feira"),
-        (3, "Quarta-feira"),
-        (4, "Quinta-feira"),
-        (5, "Sexta-feira"),
-        (6, "Sábado"),
-        (7, "Domingo"),
+class MensagemWhatsApp(models.Model):
+    """
+    Modelo para armazenar mensagens individuais do WhatsApp.
+    """
+    TIPO_MENSAGEM_CHOICES = [
+        ('usuario', 'Usuário'),
+        ('bot', 'Bot'),
+        ('sistema', 'Sistema'),
     ]
-
-    medico = models.ForeignKey(Medico, on_delete=models.CASCADE, related_name="horarios_trabalho")
-    dia_da_semana = models.IntegerField(choices=DIA_DA_SEMANA_CHOICES)
-    hora_inicio = models.TimeField()
-    hora_fim = models.TimeField()
-
+    
+    conversa = models.ForeignKey(
+        ConversaWhatsApp,
+        on_delete=models.CASCADE,
+        related_name='mensagens'
+    )
+    tipo = models.CharField(
+        max_length=10,
+        choices=TIPO_MENSAGEM_CHOICES
+    )
+    conteudo = models.TextField()
+    metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Metadados da mensagem (IDs, timestamps, etc)"
+    )
+    processada = models.BooleanField(default=False)
+    erro = models.TextField(blank=True, null=True)
+    
+    criado_em = models.DateTimeField(auto_now_add=True)
+    
     class Meta:
-        unique_together = ('medico', 'dia_da_semana', 'hora_inicio') # Garante que não haja horários duplicados
-
-    def __str__(self):
-        return f"{self.medico.nome} - {self.get_dia_da_semana_display()}: {self.hora_inicio} às {self.hora_fim}"
-
-# NOVO MODELO: Para armazenar as consultas agendadas pelo bot.
-class Agendamento(models.Model):
-    STATUS_CHOICES = [
-        ('Pendente', 'Pendente'),
-        ('Confirmado', 'Confirmado'),
-        ('Cancelado', 'Cancelado'),
-        ('Realizado', 'Realizado'),
-    ]
-
-    paciente_nome = models.CharField(max_length=255)
-    paciente_telefone = models.CharField(max_length=20) # Número do WhatsApp
-    medico = models.ForeignKey(Medico, on_delete=models.PROTECT)
-    data_hora_inicio = models.DateTimeField()
-    data_hora_fim = models.DateTimeField()
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='Pendente')
+        ordering = ['criado_em']
+        verbose_name = 'Mensagem WhatsApp'
+        verbose_name_plural = 'Mensagens WhatsApp'
     
-    # NOVO CAMPO: A "ponte" entre nosso sistema e o Google Calendar
-    google_event_id = models.CharField(max_length=255, blank=True, null=True, unique=True)
+    def __str__(self):
+        return f"{self.get_tipo_display()}: {self.conteudo[:50]}..."
+
+
+class IntencaoUsuario(models.Model):
+    """
+    Modelo para armazenar intenções identificadas nas mensagens dos usuários.
+    """
+    INTENCAO_CHOICES = [
+        ('agendar_consulta', 'Agendar Consulta'),
+        ('remarcar_consulta', 'Remarcar Consulta'),
+        ('cancelar_consulta', 'Cancelar Consulta'),
+        ('informacao_medico', 'Informação sobre Médico'),
+        ('informacao_exame', 'Informação sobre Exame'),
+        ('informacao_clinica', 'Informação sobre Clínica'),
+        ('horario_funcionamento', 'Horário de Funcionamento'),
+        ('localizacao', 'Localização'),
+        ('valores', 'Valores e Preços'),
+        ('convenios', 'Convênios'),
+        ('outro', 'Outro'),
+    ]
+    
+    mensagem = models.ForeignKey(
+        MensagemWhatsApp,
+        on_delete=models.CASCADE,
+        related_name='intencoes'
+    )
+    intencao = models.CharField(
+        max_length=30,
+        choices=INTENCAO_CHOICES
+    )
+    confianca = models.FloatField(
+        default=0.0,
+        help_text="Nível de confiança na identificação da intenção (0-1)"
+    )
+    entidades = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Entidades extraídas (datas, nomes, etc)"
+    )
+    
+    criado_em = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-confianca']
+        verbose_name = 'Intenção do Usuário'
+        verbose_name_plural = 'Intenções dos Usuários'
+    
+    def __str__(self):
+        return f"{self.get_intencao_display()} (Confiança: {self.confianca:.2f})"
+
+
+class RespostaAutomatica(models.Model):
+    """
+    Modelo para armazenar respostas automáticas padrão do chatbot.
+    """
+    gatilho = models.CharField(
+        max_length=100,
+        unique=True,
+        help_text="Palavra-chave ou padrão que ativa esta resposta"
+    )
+    resposta = models.TextField(
+        help_text="Texto da resposta automática"
+    )
+    tipo = models.CharField(
+        max_length=30,
+        default='informacao',
+        help_text="Tipo/categoria da resposta"
+    )
+    prioridade = models.IntegerField(
+        default=0,
+        help_text="Prioridade da resposta (maior número = maior prioridade)"
+    )
+    ativa = models.BooleanField(default=True)
+    uso_contador = models.IntegerField(
+        default=0,
+        help_text="Contador de quantas vezes foi usada"
+    )
     
     criado_em = models.DateTimeField(auto_now_add=True)
     atualizado_em = models.DateTimeField(auto_now=True)
     
-    def __str__(self):
-        return f"Consulta de {self.paciente_nome} com {self.medico.nome} em {self.data_hora_inicio.strftime('%d/%m/%Y %H:%M')}"
-
-
-class Exame(models.Model):
-    nome = models.CharField(max_length=100)
-    o_que_e = models.TextField()
-    como_funciona = models.TextField()
-    preparacao = models.TextField(blank=True, null=True)
-    vantagem = models.TextField(blank=True, null=True)
-    preco = models.DecimalField(max_digits=8, decimal_places=2)
-
-    def __str__(self):
-        return self.nome
+    class Meta:
+        ordering = ['-prioridade', 'gatilho']
+        verbose_name = 'Resposta Automática'
+        verbose_name_plural = 'Respostas Automáticas'
     
+    def __str__(self):
+        return f"{self.gatilho} - {self.tipo}"
+
+
+class LogChatbot(models.Model):
+    """
+    Modelo para registrar logs de atividades do chatbot.
+    """
+    NIVEL_CHOICES = [
+        ('debug', 'Debug'),
+        ('info', 'Info'),
+        ('warning', 'Warning'),
+        ('error', 'Error'),
+        ('critical', 'Critical'),
+    ]
+    
+    nivel = models.CharField(
+        max_length=10,
+        choices=NIVEL_CHOICES,
+        default='info'
+    )
+    modulo = models.CharField(
+        max_length=100,
+        help_text="Módulo/componente que gerou o log"
+    )
+    mensagem = models.TextField()
+    detalhes = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Detalhes adicionais em JSON"
+    )
+    conversa = models.ForeignKey(
+        ConversaWhatsApp,
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name='logs'
+    )
+    
+    criado_em = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-criado_em']
+        verbose_name = 'Log do Chatbot'
+        verbose_name_plural = 'Logs do Chatbot'
+        indexes = [
+            models.Index(fields=['-criado_em', 'nivel']),
+        ]
+    
+    def __str__(self):
+        return f"[{self.get_nivel_display()}] {self.modulo}: {self.mensagem[:50]}..."
