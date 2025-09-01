@@ -2,7 +2,6 @@
 
 from django.db import models
 
-from django.db import models
 
 class Conversa(models.Model):
     STATUS_CHOICES = [
@@ -67,7 +66,7 @@ class Direcionamento(models.Model):
         ('resolvido', 'Resolvido'),
     ]
     
-    paciente = models.ForeignKey('usuarios.Paciente', on_delete=models.CASCADE)
+    paciente = models.ForeignKey('usuarios.Paciente', on_delete=models.CASCADE, related_name='direcionamentos')
     conversa = models.ForeignKey(Conversa, on_delete=models.CASCADE)
     tipo_solicitacao = models.CharField(max_length=30, choices=TIPO_CHOICES)
     medico_interesse = models.ForeignKey('clinica.Medico', on_delete=models.SET_NULL, blank=True, null=True)
