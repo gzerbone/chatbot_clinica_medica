@@ -1,67 +1,31 @@
-import json
+"""
+Serviço responsável pela integração com IA (Gemini)
+"""
 import os
 
-import requests
-from google import genai  # API nova (google-genai)
+from google import genai
 from google.genai import types as genai_types
 
-from .models import ClinicaInfo, Exame, HorarioTrabalho, Medico
+from clinica.models import ClinicaInfo, Exame, HorarioTrabalho, Medico
 
 
-def send_whatsapp_message(user_number, message_text):
-    """
-    Envia uma mensagem de texto simples para um número do WhatsApp.
-    """
-    access_token = os.environ.get("WHATSAPP_ACCESS_TOKEN")
-    bot_phone_number_id = os.environ.get("WHATSAPP_PHONE_NUMBER_ID")
-
-    if not access_token or not bot_phone_number_id:
-        print("Erro: As variáveis de ambiente WHATSAPP_ACCESS_TOKEN e WHATSAPP_PHONE_NUMBER_ID não foram definidas.")
-        return
-
-    WHATSAPP_API_URL = f"https://graph.facebook.com/v19.0/{bot_phone_number_id}/messages"
-
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json",
-    }
-
-    data = {
-        "messaging_product": "whatsapp",
-        "to": user_number,
-        "type": "text",
-        "text": {
-            "body": message_text
-        }
-    }
-
-    print(f"Enviando para {user_number}: {message_text}")
-    response = requests.post(WHATSAPP_API_URL, headers=headers, data=json.dumps(data))
-
-    print(f"Status da Resposta da Meta: {response.status_code}")
-    print(f"Corpo da Resposta da Meta: {response.json()}")
-
-    return response
-
-def generate_gemini_response(chat_history):
-    """
-    Envia o histórico da conversa para a API nova (google-genai) e retorna a resposta.
-    chat_history: Lista de mensagens no formato [{'role': 'user'|'model', 'parts': ['texto']}]
-    """
-    api_key = os.environ.get("GEMINI_API_KEY")
-
-    if not api_key:
-        return "Erro: A variável de ambiente GEMINI_API_KEY não foi configurada."
-
-    try:
-        client = genai.Client(api_key=api_key)
-        # --- BUSCA DINÂMICA DE DADOS ---
-        clinica = ClinicaInfo.objects.first() # Pega o primeiro (e único) registro da clínica
+class AIService:
+    """Serviço para gerenciar interações com IA"""
+    
+    def __init__(self):
+        self.api_key = os.environ.get("GEMINI_API_KEY")
+        if not self.api_key:
+            raise ValueError("GEMINI_API_KEY não configurada")
+        
+        self.client = genai.Client(api_key=self.api_key)
+    
+    def _build_knowledge_base(self):
+        """Constrói a base de conhecimento estruturada"""
+        clinica = ClinicaInfo.objects.first()
         medicos = Medico.objects.all()
         exames = Exame.objects.all()
         horarios_trabalho = HorarioTrabalho.objects.all()
-
-        # --- MONTAGEM DA BASE DE CONHECIMENTO ESTRUTURADA ---
+        
         knowledge_base = "<knowledge_base>\n"
         
         # Informações da Clínica
@@ -74,7 +38,7 @@ def generate_gemini_response(chat_history):
         knowledge_base += f"  <referencia>{clinica.referencia_localizacao}</referencia>\n"
         knowledge_base += f"  <politica_atendimento>{clinica.politica_agendamento}</politica_atendimento>\n"
         knowledge_base += "</clinica>\n"
-
+        
         # Informações dos Médicos
         knowledge_base += "<corpo_clinico>\n"
         for medico in medicos:
@@ -88,7 +52,7 @@ def generate_gemini_response(chat_history):
             knowledge_base += f"  <retorno>{medico.retorno_info}</retorno>\n"
             knowledge_base += "</medico>\n"
         knowledge_base += "</corpo_clinico>\n"
-
+        
         # Informações dos Horários de Trabalho
         knowledge_base += "<horarios_trabalho>\n"
         for horario in horarios_trabalho:
@@ -99,7 +63,7 @@ def generate_gemini_response(chat_history):
             knowledge_base += f"  <horario_fim>{horario.hora_fim}</horario_fim>\n"
             knowledge_base += "</horario>\n"
         knowledge_base += "</horarios_trabalho>\n"
-
+        
         # Informações dos Exames
         knowledge_base += "<exames_realizados>\n"
         for exame in exames:
@@ -114,9 +78,13 @@ def generate_gemini_response(chat_history):
         knowledge_base += "</exames_realizados>\n"
         
         knowledge_base += "</knowledge_base>"
-
-        # --- TEMPLATE DO PROMPT (PARTE FIXA) ---
-        system_prompt = f"""
+        return knowledge_base
+    
+    def _build_system_prompt(self, clinica):
+        """Constrói o prompt do sistema"""
+        knowledge_base = self._build_knowledge_base()
+        
+        return f"""
             ### PERSONA ###
             Você é o PneumoSono, o assistente virtual oficial da Clínica PneumoSono. Sua personalidade é amigável, profissional e humana. Você se comunica em português do Brasil de forma clara e cordial. 
             **Sempre informe ao usuário que você é um assistente virtual e não um médico ou uma secretária humana.**
@@ -155,38 +123,36 @@ def generate_gemini_response(chat_history):
 
             4.  **SEJA PROATIVO:** Sempre termine suas respostas com uma pergunta para guiar a conversa.
             """
+    
+    def generate_response(self, chat_history):
+        """Gera resposta da IA baseada no histórico da conversa"""
+        try:
+            clinica = ClinicaInfo.objects.first()
+            system_prompt = self._build_system_prompt(clinica)
             
-        # Verifica se há histórico de conversa
-        if not chat_history:
-            return "Erro: Histórico de conversa vazio."
-
-        # Esta seção prepara os dados para a API do Gemini:
-        # to_parts(): Função auxiliar que converte uma lista de strings em objetos Part que a API do Gemini entende
-        # contents: Lista vazia que será preenchida com objetos Content formatados corretamente para enviar ao modelo
-        # Basicamente, está convertendo o histórico de conversa do formato interno do sistema para o formato específico que a nova API do Google Gemini (google-genai) requer.
-        def to_parts(parts_list):
-            return [genai_types.Part.from_text(text=p) for p in parts_list]
-
-        contents: list[genai_types.Content] = []
-
-        # Replica o histórico existente
-        for item in chat_history:
-            role = item.get('role', 'user')
-            parts = item.get('parts', [])
-            contents.append(genai_types.Content(role=role, parts=to_parts(parts)))
-
-        # Chamada única passando system_instruction no config
-        response = client.models.generate_content(
-            model="gemini-2.0-flash-exp",
-            contents=contents,
-            config=genai_types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                thinking_config=genai_types.ThinkingConfig(thinking_budget=0)
+            if not chat_history:
+                return "Erro: Histórico de conversa vazio."
+            
+            def to_parts(parts_list):
+                return [genai_types.Part.from_text(text=p) for p in parts_list]
+            
+            contents = []
+            for item in chat_history:
+                role = item.get('role', 'user')
+                parts = item.get('parts', [])
+                contents.append(genai_types.Content(role=role, parts=to_parts(parts)))
+            
+            response = self.client.models.generate_content(
+                model="gemini-2.0-flash-exp",
+                contents=contents,
+                config=genai_types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    thinking_config=genai_types.ThinkingConfig(thinking_budget=0)
+                )
             )
-        )
-
-        return response.text or ""
-
-    except Exception as e:
-        print(f"Ocorreu um erro ao chamar a API do Gemini: {e}")
-        return "Desculpe, estou com um problema para processar sua solicitação no momento. Tente novamente mais tarde."
+            
+            return response.text or ""
+            
+        except Exception as e:
+            print(f"Erro ao chamar a API do Gemini: {e}")
+            return "Desculpe, estou com um problema para processar sua solicitação no momento. Tente novamente mais tarde."
