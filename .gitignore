@@ -4,6 +4,9 @@
 *.pyc
 __pycache__
 db.sqlite3
+*.db
+*.sqlite
+*.sqlite3
 media
 
 # Backup files # 
@@ -138,3 +141,4 @@ GitHub.sublime-settings
 .history
 google-credentials.json
 README_ESTRUTURA.md
+informacoes_etapas.md
